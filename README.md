@@ -1,100 +1,123 @@
 ### Jakub Kozub
 
-SOC L2 analyst moving into application security. Detection and incident response by day;
-web and API security research on the side, with a focus on **access control, authentication
-and business logic** — the classes that scanners do not find — in software a lot of people
-quietly rely on: WordPress, Elastic, GitLab, Matomo.
+SOC L2 analyst at Jagiellonian University, Krakow. I find the access-control bugs that scanners
+routinely miss, then I write the tested detections that catch them.
 
-I read source, run every proof of concept in a local lab before filing, and report only what
-I measured.
+Authorization and business-logic research on open-source software a lot of people quietly rely
+on: WordPress, Elastic, GitLab, Matomo. Every proof of concept runs in a local lab before
+anything is filed.
 
-- Portfolio — https://jakubkozub.com
-- HackerOne — https://hackerone.com/jakubk
-- Certifications — eCTHP · CDSA · BTL1 · postgraduate offensive security (University of Warsaw)
-- Approved Wordfence researcher · 4× CTF podium (2× 1st)
+#### Two Critical findings in WordPress core and the Gutenberg plugin
+
+One audit of freshly added media-handling code during the 7.1 beta. Both fixed before 7.1
+shipped, both paid, neither a duplicate.
+
+| Report | Severity | What it was |
+|---|---|---|
+| [#3931777](https://hackerone.com/reports/3931777) | **CVSS 9.9**, CWE-22 | The lowest role allowed to upload files could delete `wp-config.php` through the media finalize route. A WordPress without `wp-config.php` hands its installer to anyone. |
+| [#3931771](https://hackerone.com/reports/3931771) | **CVSS 9.0**, CWE-79 | The same controllable filename ran as script in any administrator's session on merely opening the media library. |
+
+Fixed in Gutenberg 23.8 and core r63200. The write-up, with the exploit replayed:
+[jakubkozub.com/research/wordpress-media-finalize](https://jakubkozub.com/research/wordpress-media-finalize/)
 
 ---
 
-### A toolkit that follows the work
+### Find the bug, then ship the detection that catches it
 
-Everything below is one workflow — **scope → find → test → redact → report** — built for the
-parts of research that decide how fast you reach a real finding, and for keeping evidence safe
-on the way out. All of it is Python, standard library only, offline by design: no telemetry,
-no cloud, nothing leaves the machine.
+Most researchers do the first half of this. Most blue teams do the second. Both halves of the
+same finding are public here.
 
-#### Scope — confirm you're allowed to touch it
+**[detections](https://github.com/kubakozub/detections)** carries the Sigma rules for what that
+9.9 leaves in the logs, with the log lines that must fire them and the ones that must not. Every
+request in the chain is authenticated, authorised and successful, so there is no request
+signature to match: the rules watch a sequence, an outcome and a state change instead. Each rule
+is rendered for Splunk, Elastic ES|QL and Kusto, and every rendering was run against the same
+fixtures on the real engines (Elasticsearch 8.19.4, Splunk 9.4.3 and the Kusto emulator).
 
-**[scope-sentinel](https://github.com/kubakozub/scope-sentinel)** · Python, stdlib only
-Answers one question before any request goes out: is this target actually in scope? Parses a
-program's scope — wildcard domains, CIDR ranges, URL-prefix rules — and returns
-IN / OUT / NOT-LISTED, where out-of-scope always beats in-scope. Its exit codes make it a gate
-you can put in front of a script, so a fat-fingered host never gets tested.
+---
 
-**[ReADQuest](https://github.com/kubakozub/ReADQuest)** · Chrome MV3
-Tags and blocks traffic by bug bounty program scope, enforced locally through
-declarativeNetRequest. Scope rules stay on disk; the extension makes no requests of its own.
+### Hire me
 
-#### Find — narrow tens of thousands of lines to the few that matter
+Contract work, taken alongside my job and independently of my employer. Three things:
 
-**[wp-authz-audit](https://github.com/kubakozub/wp-authz-audit)** · Python, stdlib only
-Finds the WordPress plugin code an attacker can reach and checks whether anything guards
-it. A plugin is tens of thousands of lines; the code an unauthenticated request reaches is
-a couple of dozen callbacks, so it maps those first and ranks them by the privilege an
-attacker actually needs. Two rules do most of the work, and both are places where the usual
-tools give the wrong answer: a nonce is CSRF defence, not authorization, and
-`current_user_can('edit_posts')` is not an ownership check when the object id comes from
-the request. Its `diff` mode compares the entry-point graph between two releases, so a
-version bump touching hundreds of lines reports only what became reachable or lost a guard.
+1. **Access-control review** of one application, plugin, internal tool or REST API. You get the
+   entry points a request can reach, ranked by who can reach them, and a report per confirmed
+   finding.
+2. **Vulnerability research** on one open-source component you depend on, audited the way the 9.9
+   was found: recent changes first, one attacker-controlled value followed across subsystems.
+   Coordinated disclosure to the maintainer where the code is not yours.
+3. **Detection engineering**: a finding, an incident or a threat model turned into rules that run
+   on your own log sources, each with the log sources it needs and tests against traffic you
+   already have.
 
-**[wp-hook-guard](https://github.com/kubakozub/wp-hook-guard)** · Python, stdlib only
-Maps every server-side entry point a WordPress plugin exposes — `wp_ajax_`/`wp_ajax_nopriv_`,
-`admin_post_`, `register_rest_route`, and `init` handlers that read the request — and flags
-the ones with no `current_user_can`, nonce or `permission_callback` behind them. A hand-written
-PHP lexer keeps hooks in comments and strings out of the results, and a `diff` mode compares
-two releases so a version bump only reports what newly became reachable or lost a guard.
+Scope, deliverables and how an engagement runs: [jakubkozub.com/#services](https://jakubkozub.com/#services)
+Email: contact@jakubkozub.com
 
-#### Test — prove the authorization gap
+---
 
-**[authz-differ](https://github.com/kubakozub/authz-differ)** · Python, stdlib only
-Takes the request you suspect and replays it under two or more identities — the owner, another
-user, nobody — then diffs the responses. When the wrong identity gets the same 200 and the same
-body, that is the IDOR; when unauthenticated gets data at all, that is missing authentication.
-One request per identity, never a scanner; every cookie and token is redacted to a
-non-reversible fingerprint in the output, which drops straight into a report.
+### Tooling from my own engagements
 
-#### Redact — never leak a session or someone's data
+Python, standard library only, offline by design, MIT. No telemetry, nothing leaves the machine.
 
-**[har-sanitizer](https://github.com/kubakozub/har-sanitizer)** · Python, stdlib only
-Cleans a HAR, a raw request, or a curl command before it becomes an attachment — cookies,
-bearer/JWT tokens, API keys, and PII (emails, Luhn-checked card numbers) become clear
-placeholders while the request stays reproducible. `--strict` re-scans the output and fails
-closed on any high-entropy token the structured pass did not reach.
+**Find the reachable code**
 
-**[redact-request](https://github.com/kubakozub/redact-request)** · Python, stdlib only
-Prints the *shape* of a captured HTTP request and never its contents, so a request can be
-discussed without handing over the session. Method, host, path with identifiers replaced,
-parameter names without values, header names with sensitive ones marked. Its test suite is
-written as leak tests: they assert on what must be **absent** from the output.
+- **[wp-authz-audit](https://github.com/kubakozub/wp-authz-audit)**: maps the WordPress plugin
+  code an attacker can reach and the guard on each path, catching a nonce standing in for
+  authorization and a capability check standing in for an ownership check. Its `diff` mode
+  compares two releases, so a version bump touching hundreds of lines reports only what became
+  reachable or lost a guard.
+- **[wp-hook-guard](https://github.com/kubakozub/wp-hook-guard)**: maps every server-side entry
+  point a plugin exposes (`wp_ajax_`, `wp_ajax_nopriv_`, `admin_post_`, `register_rest_route`,
+  `init` handlers that read the request) and flags those with no capability check, nonce or
+  permission callback behind them. A hand-written PHP lexer keeps hooks in comments and strings
+  out of the results.
 
-**[evidence-redaction-gate](https://github.com/kubakozub/evidence-redaction-gate)** · Python, stdlib only
-A fail-closed gate that refuses to let secrets and PII leave the machine inside evidence.
-Built after I measured that two detectors in my own workflow had silently drifted apart —
-9/31 and 13/31 on realistic secret shapes. One shared module, an adversarial corpus, and a
-test asserting both gates import it: 31/31 with zero false alarms. Handles the shapes a
-naive grep misses — pretty-printed HAR entries split across lines, bodies wrapped in
-`postData.text`, tokens in the URL fragment, `curl -b`.
+**Prove the gap**
 
-#### Report — one clean, reproducible write-up
+- **[authz-differ](https://github.com/kubakozub/authz-differ)**: replays one request under
+  several identities, the owner, another user, nobody, then diffs the responses. Same 200 and
+  same body for the wrong identity is the IDOR. One request per identity, never a scanner, every
+  credential redacted to a non-reversible fingerprint.
 
-**[finding-forge](https://github.com/kubakozub/finding-forge)** · Python, stdlib only
-Turns a confirmed finding into a report a triager can act on: a per-bug-class scaffold with the
-sections they expect, a CVSS 3.1 scorer that matches the FIRST calculator to the decimal, and a
-lint that fails the draft when a section is empty or a secret slipped into the write-up.
+**Get the evidence out safely**
+
+- **[har-sanitizer](https://github.com/kubakozub/har-sanitizer)**: redacts cookies, bearer and
+  JWT tokens, API keys and PII from a HAR, a raw request or a curl command while keeping the
+  request reproducible. `--strict` re-scans its own output and fails closed on any high-entropy
+  token the structured pass did not reach.
+- **[evidence-redaction-gate](https://github.com/kubakozub/evidence-redaction-gate)**: a
+  fail-closed gate that refuses to let secrets or PII leave inside evidence. Built after I
+  measured that two detectors in my own workflow had silently drifted apart, 9 of 31 and 13 of 31
+  on realistic secret shapes. One shared module and an adversarial corpus took it to 31 of 31
+  with no false alarms.
+- **[redact-request](https://github.com/kubakozub/redact-request)**: prints the shape of a
+  captured request and never its contents, so a request can be discussed without handing over
+  the session. Its tests are written as leak tests: they assert on what must be absent.
+
+**Scope it and write it up**
+
+- **[scope-sentinel](https://github.com/kubakozub/scope-sentinel)**: answers whether a target is
+  actually in scope before any request goes out, where out of scope always beats in scope. Its
+  exit codes make it a gate in front of a script.
+- **[finding-forge](https://github.com/kubakozub/finding-forge)**: turns a confirmed finding into
+  a report a triager can act on, with a CVSS 3.1 scorer that matches the FIRST calculator to the
+  decimal and a lint that fails the draft on an empty section or a leaked secret.
+
+---
+
+### Credentials
+
+eWPTX, eCTHP, CDSA, BTL2. Approved Wordfence researcher. 4x CTF podium (2x first), Vision One
+European CTF finalist. MSc Information Technology (AHE Lodz). Postgraduate cybersecurity and MA
+English Philology (University of Warsaw).
+
+- Portfolio: [jakubkozub.com](https://jakubkozub.com)
+- HackerOne: [hackerone.com/jakubk](https://hackerone.com/jakubk)
 
 ---
 
 ### How I work
 
-Authorized testing only, inside an agreed scope. Responsible disclosure, vendor first.
-Findings are worth reporting when they are reproducible and the impact is stated honestly —
-including where it stops.
+Authorized testing only, inside an agreed scope. Vendor first, coordinated disclosure. Nothing is
+filed until it is rebuilt in a lab, and I report only what I measured, including where the impact
+stops.
